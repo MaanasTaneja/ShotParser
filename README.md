@@ -10,7 +10,6 @@ Given any video, the pipeline produces a structured JSON breakdown of every indi
 
 The web viewer lets you load the video and JSON side-by-side, scrub through shots on an interactive zoomable timeline, and read the full analysis for each clip as you watch.
 
-<!-- Screenshot: viewer with video loaded and shot list visible -->
 
 ---
 
@@ -82,7 +81,6 @@ Before each Gemini call, a two-track optical flow computation runs on the extrac
 
 The higher of the two scores drives the output tier: static / low-to-moderate / clear / strong. Direction is intentionally omitted — the hint tells Gemini what intensity to expect so it doesn't default to "static," but the final call on movement type is left to the model.
 
-<!-- Screenshot: example output JSON showing motion and composition fields -->
 
 ---
 
@@ -98,7 +96,6 @@ The `VideoMemory` class in `memory.py` addresses this with two mechanisms:
 
 Together these mean that Gemini analyzes each clip as an informed collaborator who has seen the full video and remembers recent events, rather than a blank-slate model seeing a decontextualized fragment.
 
-<!-- Screenshot: example registry JSON with character and location entries -->
 
 ---
 
@@ -130,9 +127,9 @@ Together these mean that Gemini analyzes each clip as an informed collaborator w
 - Shot list panel with full metadata — clicking a shot jumps the video to that point
 - Auto-scrolls the current shot into view as the video plays
 
-<!-- Screenshot: timeline zoomed in showing individual shot markers -->
+![Viewer — fractal animation video with shot breakdown panel](ss1.png)
 
-<!-- Screenshot: shot card expanded showing composition, audio, and metadata fields -->
+![Viewer — cinematic video with aerial shots and full metadata](ss2.png)
 
 ---
 
