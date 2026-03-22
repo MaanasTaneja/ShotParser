@@ -2,6 +2,10 @@
 
 Automated shot-by-shot video analysis pipeline. Detects every cut in a video using a custom multi-pass scene splitting algorithm, transcribes dialogue with word-level timestamps, and generates detailed cinematographic descriptions of each shot using Google Gemini — all wrapped in an interactive web viewer.
 
+![Viewer — cinematic video with aerial shots and full metadata](ss2.png)
+
+![Viewer — fractal animation video with shot breakdown panel](ss1.png)
+
 ---
 
 ## What it does
@@ -9,7 +13,6 @@ Automated shot-by-shot video analysis pipeline. Detects every cut in a video usi
 Given any video, the pipeline produces a structured JSON breakdown of every individual shot: shot type, camera angle, lens, focus, movement, full composition description, dialogue, music, and sound effects. A second JSON file stores a persistent entity registry — every character, location, and prop seen in the video, described once and referenced consistently across all shots.
 
 The web viewer lets you load the video and JSON side-by-side, scrub through shots on an interactive zoomable timeline, and read the full analysis for each clip as you watch.
-
 
 ---
 
@@ -127,9 +130,6 @@ Together these mean that Gemini analyzes each clip as an informed collaborator w
 - Shot list panel with full metadata — clicking a shot jumps the video to that point
 - Auto-scrolls the current shot into view as the video plays
 
-![Viewer — fractal animation video with shot breakdown panel](ss1.png)
-
-![Viewer — cinematic video with aerial shots and full metadata](ss2.png)
 
 ---
 
