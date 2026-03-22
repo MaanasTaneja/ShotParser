@@ -1,0 +1,10 @@
+google-genai
+python-dotenv
+openai
+ffmpeg-python
+pillow
+# CLIP scene merging (pass 2)
+transformers
+torch
+# local Whisper (only needed if --transcriber local)
+openai-whisper

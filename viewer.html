@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Shot Analyzer</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fafaf9; color: #1c1917; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+    const formatTime = (seconds) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds % 1) * 1000);
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+    };
+
+    const parseTime = (timeStr) => {
+      if (typeof timeStr === 'number') return timeStr;
+      const match = timeStr?.match(/(\d+):(\d+)\.(\d+)/);
+      if (!match) return 0;
+      // Divide by 10^digits so "587" → /1000, "58" → /100, "5" → /10
+      return parseInt(match[1]) * 60 + parseInt(match[2]) + parseInt(match[3]) / Math.pow(10, match[3].length);
+    };
+
+    function UploadScreen({ data, onLoad }) {
+      const [dragOver, setDragOver] = useState(false);
+
+      const handleFile = async (file, type) => {
+        if (type === 'json') {
+          const text = await file.text();
+          onLoad(prev => ({ ...prev, analysis: JSON.parse(text), analysisName: file.name }));
+        } else {
+          onLoad(prev => ({ ...prev, videoUrl: URL.createObjectURL(file), videoName: file.name }));
+        }
+      };
+
+      const handleDrop = (e) => {
+        e.preventDefault();
+        setDragOver(false);
+        for (const file of e.dataTransfer.files) {
+          if (file.name.endsWith('.json')) handleFile(file, 'json');
+          else if (file.type.startsWith('video/')) handleFile(file, 'video');
+        }
+      };
+
+      const hasVideo = !!data.videoUrl;
+      const hasJson = !!data.analysis;
+
+      return (
+        <div 
+          style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, background: '#fafaf9' }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+        >
+          <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 8 }}>Video Shot Analyzer</h1>
+          <p style={{ color: '#78716c', marginBottom: 32, fontSize: 14 }}>Upload a video + analysis JSON</p>
+          
+          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+            <label style={{ 
+              padding: '16px 24px', 
+              border: hasVideo ? '1px solid #a8a29e' : '1px dashed #d6d3d1', 
+              borderRadius: 8, 
+              cursor: 'pointer', 
+              background: 'white',
+              minWidth: 160,
+              textAlign: 'center'
+            }}>
+              <input type="file" accept="video/*" hidden onChange={(e) => e.target.files[0] && handleFile(e.target.files[0], 'video')} />
+              <div style={{ fontSize: 13, fontWeight: 500, color: '#1c1917' }}>
+                {hasVideo ? '✓ Video' : 'Video'}
+              </div>
+              <div style={{ fontSize: 11, color: '#78716c', marginTop: 4, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {hasVideo ? data.videoName : 'Click to upload'}
+              </div>
+            </label>
+            
+            <label style={{ 
+              padding: '16px 24px', 
+              border: hasJson ? '1px solid #a8a29e' : '1px dashed #d6d3d1', 
+              borderRadius: 8, 
+              cursor: 'pointer', 
+              background: 'white',
+              minWidth: 160,
+              textAlign: 'center'
+            }}>
+              <input type="file" accept=".json" hidden onChange={(e) => e.target.files[0] && handleFile(e.target.files[0], 'json')} />
+              <div style={{ fontSize: 13, fontWeight: 500, color: '#1c1917' }}>
+                {hasJson ? '✓ JSON' : 'JSON'}
+              </div>
+              <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>
+                {hasJson ? `${data.analysis?.shots?.length || 0} shots` : 'Click to upload'}
+              </div>
+            </label>
+          </div>
+
+          {(hasVideo || hasJson) && !(hasVideo && hasJson) && (
+            <p style={{ fontSize: 12, color: '#78716c', marginBottom: 16 }}>
+              {hasVideo && !hasJson && 'Now upload the JSON file'}
+              {!hasVideo && hasJson && 'Now upload the video file'}
+            </p>
+          )}
+          
+          <p style={{ fontSize: 11, color: '#a8a29e' }}>or drag and drop</p>
+        </div>
+      );
+    }
+
+    function Viewer({ videoUrl, videoName, analysis, onReset }) {
+      const videoRef = useRef(null);
+      const shotListRef = useRef(null);
+      const progressRef = useRef(null);
+      const timelineRef = useRef(null);
+      const [currentTime, setCurrentTime] = useState(0);
+      const [duration, setDuration] = useState(0);
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [selectedIndex, setSelectedIndex] = useState(null);
+      const [isScrubbing, setIsScrubbing] = useState(false);
+      const [zoom, setZoom] = useState(1); // 1 = fit to width, higher = zoomed in
+
+      const shots = analysis?.shots || [];
+
+      const currentShotIndex = useMemo(() => {
+        for (let i = shots.length - 1; i >= 0; i--) {
+          const start = parseTime(shots[i].startTime);
+          if (currentTime >= start) return i;
+        }
+        return 0;
+      }, [shots, currentTime]);
+
+      useEffect(() => {
+        if (!isPlaying) return;
+        let raf;
+        const update = () => {
+          if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
+          raf = requestAnimationFrame(update);
+        };
+        raf = requestAnimationFrame(update);
+        return () => cancelAnimationFrame(raf);
+      }, [isPlaying]);
+
+      useEffect(() => {
+        if (!shotListRef.current || isScrubbing) return;
+        const el = shotListRef.current.querySelector(`[data-index="${currentShotIndex}"]`);
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, [currentShotIndex, isScrubbing]);
+
+      const seekTo = (time) => {
+        if (videoRef.current) {
+          videoRef.current.currentTime = time;
+          setCurrentTime(time);
+        }
+      };
+
+      const togglePlay = () => {
+        if (videoRef.current) {
+          isPlaying ? videoRef.current.pause() : videoRef.current.play();
+        }
+      };
+
+      // Timeline scrubbing
+      const handleTimelineClick = (e) => {
+        if (!timelineRef.current || !progressRef.current || !duration) return;
+        const containerRect = progressRef.current.getBoundingClientRect();
+        const clickX = e.clientX - containerRect.left + progressRef.current.scrollLeft;
+        const timelineWidth = timelineRef.current.offsetWidth;
+        const time = (clickX / timelineWidth) * duration;
+        const snappedTime = Math.round(time * 24) / 24; // snap to nearest frame at 24fps
+        seekTo(Math.max(0, Math.min(duration, snappedTime)));
+      };
+
+      const handleProgressMouseDown = (e) => {
+        setIsScrubbing(true);
+        handleTimelineClick(e);
+      };
+
+      useEffect(() => {
+        if (!isScrubbing) return;
+        // Prevent text selection while scrubbing
+        document.body.style.userSelect = 'none';
+        document.body.style.WebkitUserSelect = 'none';
+        const handleMove = (e) => {
+          e.preventDefault();
+          if (!timelineRef.current || !progressRef.current || !duration) return;
+          const containerRect = progressRef.current.getBoundingClientRect();
+          const clickX = e.clientX - containerRect.left + progressRef.current.scrollLeft;
+          const timelineWidth = timelineRef.current.offsetWidth;
+          const time = (clickX / timelineWidth) * duration;
+          const snappedTime = Math.round(time * 24) / 24; // snap to nearest frame at 24fps
+          seekTo(Math.max(0, Math.min(duration, snappedTime)));
+        };
+        const handleUp = () => {
+          setIsScrubbing(false);
+          document.body.style.userSelect = '';
+          document.body.style.WebkitUserSelect = '';
+        };
+        document.addEventListener('mousemove', handleMove);
+        document.addEventListener('mouseup', handleUp);
+        return () => {
+          document.removeEventListener('mousemove', handleMove);
+          document.removeEventListener('mouseup', handleUp);
+          document.body.style.userSelect = '';
+          document.body.style.WebkitUserSelect = '';
+        };
+      }, [isScrubbing, duration, zoom]);
+
+      // Wheel zoom on timeline
+      useEffect(() => {
+        const container = progressRef.current;
+        if (!container) return;
+        const handleWheel = (e) => {
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const factor = e.deltaY > 0 ? 0.92 : 1.09;
+            setZoom(z => Math.max(1, Math.min(10, z * factor)));
+          }
+        };
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        return () => container.removeEventListener('wheel', handleWheel);
+      }, []);
+
+      // Keep playhead in view when zoomed
+      useEffect(() => {
+        if (!progressRef.current || !timelineRef.current || !duration || isScrubbing) return;
+        const container = progressRef.current;
+        const timelineWidth = timelineRef.current.offsetWidth;
+        const playheadX = (currentTime / duration) * timelineWidth;
+        const viewLeft = container.scrollLeft;
+        const viewRight = viewLeft + container.clientWidth;
+        if (playheadX < viewLeft + 50 || playheadX > viewRight - 50) {
+          container.scrollLeft = playheadX - container.clientWidth / 2;
+        }
+      }, [currentTime, duration, zoom, isScrubbing]);
+
+      useEffect(() => {
+        const handleKey = (e) => {
+          if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+          if (e.key === 'ArrowLeft') { e.preventDefault(); seekTo(Math.max(0, currentTime - (e.shiftKey ? 1 : 1/24))); }
+          if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(Math.min(duration, currentTime + (e.shiftKey ? 1 : 1/24))); }
+        };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+      }, [currentTime, duration, isPlaying]);
+
+      return (
+        <div style={{ display: 'flex', height: '100vh' }}>
+          {/* Left side: video */}
+          <div style={{ width: '55%', display: 'flex', flexDirection: 'column', borderRight: '1px solid #e7e5e4' }}>
+            <div style={{ flex: 1, background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                onClick={togglePlay}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={(e) => setDuration(e.target.duration)}
+                style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8, cursor: 'pointer' }}
+              />
+            </div>
+            
+            {/* Timeline (zoomable) */}
+            <div 
+              ref={progressRef}
+              onMouseDown={handleProgressMouseDown}
+              style={{ height: 40, background: '#1c1917', cursor: 'pointer', position: 'relative', overflowX: 'auto', overflowY: 'hidden', userSelect: 'none', WebkitUserSelect: 'none' }}
+            >
+              <div ref={timelineRef} style={{ position: 'relative', height: '100%', width: `${100 * zoom}%`, minWidth: '100%', userSelect: 'none', WebkitUserSelect: 'none' }}>
+                {/* Time ticks */}
+                {duration > 0 && Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => (
+                  <div key={i} style={{ position: 'absolute', left: `${(i / duration) * 100}%`, top: 0, height: i % 5 === 0 ? 12 : 6, width: 1, background: 'rgba(255,255,255,0.2)' }}>
+                    {i % 5 === 0 && <span style={{ position: 'absolute', top: 14, left: -12, width: 24, textAlign: 'center', fontSize: 9, color: 'rgba(255,255,255,0.4)' }}>{i}s</span>}
+                  </div>
+                ))}
+                
+                {/* Shot markers */}
+                {shots.map((shot, i) => {
+                  const start = parseTime(shot.startTime);
+                  const pct = duration ? (start / duration) * 100 : 0;
+                  return (
+                    <div key={i} style={{ position: 'absolute', left: `${pct}%`, top: 0, bottom: 0, width: 2, background: currentShotIndex === i ? '#fbbf24' : 'rgba(255,255,255,0.4)', zIndex: 2 }} />
+                  );
+                })}
+                
+                {/* Playhead */}
+                <div style={{ position: 'absolute', left: duration ? `${(currentTime / duration) * 100}%` : 0, top: 0, bottom: 0, width: 2, background: '#ef4444', zIndex: 10, transform: 'translateX(-1px)' }}>
+                  <div style={{ position: 'absolute', top: -2, left: -4, width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: '6px solid #ef4444' }} />
+                </div>
+              </div>
+            </div>
+            
+            {/* Controls */}
+            <div style={{ padding: '12px 16px', background: '#f5f5f4', borderTop: '1px solid #e7e5e4', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button onClick={togglePlay} style={{ width: 36, height: 36, border: 'none', borderRadius: 6, background: '#1c1917', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isPlaying ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+                )}
+              </button>
+              <button onClick={() => seekTo(Math.max(0, currentTime - 1/24))} style={{ width: 28, height: 28, border: 'none', borderRadius: 4, background: '#e7e5e4', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="#57534e"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+              </button>
+              <button onClick={() => seekTo(Math.min(duration, currentTime + 1/24))} style={{ width: 28, height: 28, border: 'none', borderRadius: 4, background: '#e7e5e4', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="#57534e"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+              </button>
+              <div style={{ padding: '6px 10px', background: '#1c1917', color: 'white', borderRadius: 4, fontFamily: 'monospace', fontSize: 12 }}>
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: '#78716c' }}>Shot {currentShotIndex + 1}/{shots.length}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: '#e7e5e4', borderRadius: 4, padding: '2px' }}>
+                  <button onClick={() => setZoom(z => Math.max(1, z / 1.5))} style={{ width: 24, height: 24, border: 'none', borderRadius: 3, background: 'transparent', cursor: 'pointer', fontSize: 14 }}>−</button>
+                  <span style={{ fontSize: 10, color: '#78716c', minWidth: 32, textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
+                  <button onClick={() => setZoom(z => Math.min(10, z * 1.5))} style={{ width: 24, height: 24, border: 'none', borderRadius: 3, background: 'transparent', cursor: 'pointer', fontSize: 14 }}>+</button>
+                </div>
+                <button onClick={onReset} style={{ padding: '5px 10px', border: '1px solid #d6d3d1', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: 11, color: '#57534e' }}>
+                  Reset
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right side: shot list */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid #e7e5e4', background: '#f5f5f4' }}>
+              <h2 style={{ fontSize: 14, fontWeight: 600 }}>Shot Breakdown</h2>
+              {analysis?.usage && (
+                <p style={{ fontSize: 11, color: '#a8a29e', marginTop: 4 }}>
+                  {analysis.usage.total_token_count?.toLocaleString()} tokens used
+                </p>
+              )}
+            </div>
+            
+            <div ref={shotListRef} style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+              {shots.map((shot, i) => {
+                const start = parseTime(shot.startTime);
+                const end = parseTime(shot.endTime);
+                const isCurrent = currentShotIndex === i;
+                
+                return (
+                  <div
+                    key={i}
+                    data-index={i}
+                    onClick={() => { setSelectedIndex(i); seekTo(start); }}
+                    style={{
+                      padding: 12,
+                      marginBottom: 8,
+                      borderRadius: 8,
+                      border: `1px solid ${isCurrent ? '#a8a29e' : '#e7e5e4'}`,
+                      background: isCurrent ? '#f5f5f4' : 'white',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span style={{ 
+                        width: 22, height: 22, borderRadius: 4, 
+                        background: isCurrent ? '#1c1917' : '#e7e5e4', 
+                        color: isCurrent ? 'white' : '#57534e',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 11, fontWeight: 600
+                      }}>
+                        {shot.id || i + 1}
+                      </span>
+                      <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#78716c' }}>
+                        {shot.startTime} → {shot.endTime}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#a8a29e' }}>
+                        ({(end - start).toFixed(2)}s)
+                      </span>
+                    </div>
+                    
+                    {(() => {
+                      const knownKeys = new Set(['id', 'startTime', 'endTime', 'cut', 'shotType', 'angle', 'lens', 'focus', 'movement', 'composition', 'graphicsOverlays', 'audio']);
+                      const extraEntries = Object.entries(shot).filter(([k, v]) => !knownKeys.has(k) && v && v !== 'None');
+                      return (
+                        <>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 8px', fontSize: 11, marginBottom: 8 }}>
+                            {shot.cut && <><span style={{ color: '#a8a29e' }}>Cut</span><span style={{ color: '#57534e' }}>{shot.cut}</span></>}
+                            {shot.shotType && <><span style={{ color: '#a8a29e' }}>Shot</span><span style={{ color: '#57534e' }}>{shot.shotType}</span></>}
+                            {shot.angle && <><span style={{ color: '#a8a29e' }}>Angle</span><span style={{ color: '#57534e' }}>{shot.angle}</span></>}
+                            {shot.lens && <><span style={{ color: '#a8a29e' }}>Lens</span><span style={{ color: '#57534e' }}>{shot.lens}</span></>}
+                            {shot.focus && <><span style={{ color: '#a8a29e' }}>Focus</span><span style={{ color: '#57534e' }}>{shot.focus}</span></>}
+                            {shot.movement && <><span style={{ color: '#a8a29e' }}>Movement</span><span style={{ color: '#57534e' }}>{shot.movement}</span></>}
+                            {extraEntries.map(([k, v]) => (
+                              <React.Fragment key={k}>
+                                <span style={{ color: '#a8a29e' }}>{k}</span>
+                                <span style={{ color: '#57534e' }}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                          
+                          {shot.composition && (
+                            <div style={{ fontSize: 11, marginBottom: 6 }}>
+                              <span style={{ color: '#a8a29e' }}>Composition </span>
+                              <span style={{ color: '#57534e', lineHeight: 1.5 }}>{shot.composition}</span>
+                            </div>
+                          )}
+                          
+                          {shot.graphicsOverlays && shot.graphicsOverlays !== 'None' && (
+                            <div style={{ fontSize: 11, marginBottom: 4 }}>
+                              <span style={{ color: '#a8a29e' }}>Graphics </span>
+                              <span style={{ color: '#57534e' }}>{shot.graphicsOverlays}</span>
+                            </div>
+                          )}
+                          
+                          {shot.audio && shot.audio !== 'None' && (
+                            <div style={{ fontSize: 11 }}>
+                              <span style={{ color: '#a8a29e' }}>Audio </span>
+                              <span style={{ color: '#57534e' }}>{shot.audio}</span>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [data, setData] = useState({ videoUrl: null, videoName: null, analysis: null, analysisName: null });
+      
+      const isReady = data.videoUrl && data.analysis;
+      
+      if (!isReady) {
+        return <UploadScreen data={data} onLoad={setData} />;
+      }
+      
+      return <Viewer {...data} onReset={() => setData({ videoUrl: null, videoName: null, analysis: null, analysisName: null })} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
